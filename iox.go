@@ -138,3 +138,15 @@ type nopWriteCloser struct {
 func (w nopWriteCloser) Close() error {
 	return nil
 }
+
+// LimitReadCloser wraps rc such that reads are limited to n bytes
+// while Close forwards to the underlying rc.
+func LimitReadCloser(rc io.ReadCloser, n int64) io.ReadCloser {
+	return readCloser{io.LimitReader(rc, n), rc}
+}
+
+// readCloser adapts an [io.Reader] plus an [io.Closer] to an [io.ReadCloser].
+type readCloser struct {
+	io.Reader
+	io.Closer
+}

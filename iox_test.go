@@ -80,3 +80,25 @@ func TestCopyContextSuccess(t *testing.T) {
 	assert.Equal(t, len(payload), count)
 	assert.Equal(t, payload, buff.String())
 }
+
+func TestLimitReadCloser(t *testing.T) {
+	// Limit reads while keeping the close behavior of the wrapped reader.
+	payload := "iox-extra"
+	closed := &atomic.Bool{}
+	rc := &iotest.FuncReadCloser{
+		ReadFunc: strings.NewReader(payload).Read,
+		CloseFunc: func() error {
+			closed.Store(true)
+			return nil
+		},
+	}
+	limited := LimitReadCloser(rc, int64(len("iox")))
+
+	out, err := io.ReadAll(limited)
+	require.NoError(t, err)
+	assert.Equal(t, "iox", string(out))
+
+	err = limited.Close()
+	require.NoError(t, err)
+	assert.True(t, closed.Load())
+}
