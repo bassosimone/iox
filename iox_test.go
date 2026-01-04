@@ -1,0 +1,82 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+package iox
+
+import (
+	"bytes"
+	"context"
+	"io"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"github.com/bassosimone/iotest"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestCopyContextWithCancelledContext(t *testing.T) {
+	// Create a reader that blocks until Close is called.
+	insideReader := make(chan struct{})
+	unblockReader := make(chan struct{})
+	closeCalled := &atomic.Bool{}
+	rc := &iotest.FuncReadCloser{
+		ReadFunc: func(b []byte) (int, error) {
+			close(insideReader)
+			<-unblockReader
+			return 0, io.EOF
+		},
+		CloseFunc: func() error {
+			closeCalled.Store(true)
+			close(unblockReader)
+			return nil
+		},
+	}
+
+	buff := &bytes.Buffer{}
+	lwc := NewLockedWriteCloser(NopWriteCloser(buff))
+
+	// Create a cancellable context.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Arrange to cancel the context once the reader has entered.
+	go func() {
+		<-insideReader
+		cancel()
+	}()
+
+	// Invoke CopyContext with a reader that blocks on Read.
+	count, err := CopyContext(ctx, lwc, rc)
+
+	// Because the context is canceled we should see zero and error.
+	require.True(t, count == 0)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.True(t, closeCalled.Load())
+	assert.Equal(t, 0, buff.Len())
+
+	// Make sure that subsequent calls to write are not propagated
+	// and that we're getting the expected error.
+	count, err = lwc.LockedWrite([]byte("0xabad1dea"))
+	require.True(t, count == 0)
+	require.ErrorIs(t, err, ErrClosed)
+
+	// Make sure subsequent calls to close are not propagated
+	// and that we're getting the expected error.
+	err = lwc.Close()
+	require.ErrorIs(t, err, ErrClosed)
+}
+
+func TestCopyContextSuccess(t *testing.T) {
+	// Create a reader that returns the full payload and then EOF.
+	const payload = "hello from iox"
+	rc := io.NopCloser(strings.NewReader(payload))
+
+	buff := &bytes.Buffer{}
+	lwc := NewLockedWriteCloser(NopWriteCloser(buff))
+
+	count, err := CopyContext(context.Background(), lwc, rc)
+	require.NoError(t, err)
+	assert.Equal(t, len(payload), count)
+	assert.Equal(t, payload, buff.String())
+}
