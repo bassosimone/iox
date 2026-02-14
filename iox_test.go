@@ -52,6 +52,8 @@ func TestCopyContextWithCancelledContext(t *testing.T) {
 	// Because the context is canceled we should see zero and error.
 	require.True(t, count == 0)
 	require.ErrorIs(t, err, context.Canceled)
+
+	// CopyContext MUST close the reader on cancellation to unblock the goroutine.
 	assert.True(t, closeCalled.Load())
 	assert.Equal(t, 0, buff.Len())
 
@@ -70,7 +72,14 @@ func TestCopyContextWithCancelledContext(t *testing.T) {
 func TestCopyContextSuccess(t *testing.T) {
 	// Create a reader that returns the full payload and then EOF.
 	const payload = "hello from iox"
-	rc := io.NopCloser(strings.NewReader(payload))
+	closeCalled := &atomic.Bool{}
+	rc := &iotest.FuncReadCloser{
+		ReadFunc: strings.NewReader(payload).Read,
+		CloseFunc: func() error {
+			closeCalled.Store(true)
+			return nil
+		},
+	}
 
 	buff := &bytes.Buffer{}
 	lwc := NewLockedWriteCloser(NopWriteCloser(buff))
@@ -79,6 +88,9 @@ func TestCopyContextSuccess(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, len(payload), count)
 	assert.Equal(t, payload, buff.String())
+
+	// CopyContext MUST NOT close the reader on success.
+	assert.False(t, closeCalled.Load())
 }
 
 func TestLimitReadCloser(t *testing.T) {

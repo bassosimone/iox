@@ -82,9 +82,12 @@ func (w writerAdapter) Write(buf []byte) (int, error) {
 
 // CopyContext is a context-interruptible variant of [io.Copy].
 //
-// It copies from rc into lwc in a background goroutine. On return (success or
-// cancellation), it closes both rc and lwc. If the context is canceled, some
-// bytes may have already been written.
+// It copies from rc into lwc in a background goroutine. On return, it always
+// closes lwc. It only closes rc when the context is canceled, to unblock any
+// in-flight Read in the background goroutine.
+//
+// On success, rc is NOT closed. The caller MUST ensure rc is closed after
+// CopyContext returns (e.g., via defer).
 //
 // The returned error is either caused by I/O or by the context.
 func CopyContext(ctx context.Context, lwc *LockedWriteCloser, rc io.ReadCloser) (int, error) {
@@ -102,22 +105,20 @@ func CopyContext(ctx context.Context, lwc *LockedWriteCloser, rc io.ReadCloser) 
 	select {
 	case <-ctx.Done():
 		err = ctx.Err()
+		// 4a. close the reader to unblock the goroutine's Read
+		rc.Close()
 	case err = <-errch:
-		// nothing
+		// 4b. success: do NOT close rc, the caller is responsible
 	}
 
-	// 4. make sure we close both the reader and the writer.
-	//
-	// In particular, this means that, when we're interrupted by the context,
-	// any writes happening after this point in [io.Copy] fail.
-	rc.Close()
+	// 5. always close the writer so the byte count is stable
 	lwc.Close()
 
-	// 5. access the number of bytes written once we have closed the
+	// 6. access the number of bytes written once we have closed the
 	// writer, so the number is stable ("happens after").
 	count := lwc.Count()
 
-	// 6. return to the caller
+	// 7. return to the caller
 	return count, err
 }
 

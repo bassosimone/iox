@@ -29,8 +29,11 @@ req := runtimex.PanicOnError1(http.NewRequestWithContext(ctx, "GET", "https://ex
 resp := runtimex.PanicOnError1(http.DefaultClient.Do(req))
 defer resp.Body.Close()
 
-// Use iox to read the body in such a way that, if the context is
-// canceled, we immediately interrupt reading
+// Use iox.CopyContext to read the body in such a way that, if the context is
+// canceled, we immediately interrupt reading.
+//
+// CopyContext only closes resp.Body on context cancellation. On success,
+// we rely on the `defer resp.Body.Close()` statement provided above.
 buff := &bytes.Buffer{}
 writer := iox.NewLockedWriteCloser(iox.NopWriteCloser(buff))
 count, err := iox.CopyContext(ctx, writer, resp.Body)
