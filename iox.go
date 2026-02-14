@@ -4,6 +4,7 @@
 package iox
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -120,6 +121,20 @@ func CopyContext(ctx context.Context, lwc *LockedWriteCloser, rc io.ReadCloser) 
 
 	// 7. return to the caller
 	return count, err
+}
+
+// ReadAllContext is a context-interruptible variant of [io.ReadAll].
+//
+// It reads from rc into an internal buffer using [CopyContext]. On success, rc
+// is NOT closed (the caller MUST close it, e.g., via defer). On context cancellation,
+// rc is closed to unblock any in-flight Read.
+//
+// The returned byte slice contains whatever was read before the error (if any),
+// so partial results are available even when the context is canceled.
+func ReadAllContext(ctx context.Context, rc io.ReadCloser) ([]byte, error) {
+	buf := &bytes.Buffer{}
+	_, err := CopyContext(ctx, NewLockedWriteCloser(NopWriteCloser(buf)), rc)
+	return buf.Bytes(), err
 }
 
 // NopWriteCloser wraps an [io.Writer] and returns a no-op [io.WriteCloser].

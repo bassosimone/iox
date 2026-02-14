@@ -93,6 +93,57 @@ func TestCopyContextSuccess(t *testing.T) {
 	assert.False(t, closeCalled.Load())
 }
 
+func TestReadAllContextWithCancelledContext(t *testing.T) {
+	// Create a reader that blocks until Close is called.
+	insideReader := make(chan struct{})
+	unblockReader := make(chan struct{})
+	closeCalled := &atomic.Bool{}
+	rc := &iotest.FuncReadCloser{
+		ReadFunc: func(b []byte) (int, error) {
+			close(insideReader)
+			<-unblockReader
+			return 0, io.EOF
+		},
+		CloseFunc: func() error {
+			closeCalled.Store(true)
+			close(unblockReader)
+			return nil
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		<-insideReader
+		cancel()
+	}()
+
+	data, err := ReadAllContext(ctx, rc)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Empty(t, data)
+	assert.True(t, closeCalled.Load())
+}
+
+func TestReadAllContextSuccess(t *testing.T) {
+	const payload = "hello from iox"
+	closeCalled := &atomic.Bool{}
+	rc := &iotest.FuncReadCloser{
+		ReadFunc: strings.NewReader(payload).Read,
+		CloseFunc: func() error {
+			closeCalled.Store(true)
+			return nil
+		},
+	}
+
+	data, err := ReadAllContext(context.Background(), rc)
+	require.NoError(t, err)
+	assert.Equal(t, payload, string(data))
+
+	// ReadAllContext MUST NOT close the reader on success.
+	assert.False(t, closeCalled.Load())
+}
+
 func TestLimitReadCloser(t *testing.T) {
 	// Limit reads while keeping the close behavior of the wrapped reader.
 	payload := "iox-extra"
